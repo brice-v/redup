@@ -13,8 +13,8 @@ A command-line tool for finding duplicate files by hashing their contents, even 
 ## Installation
 
 ```bash
-# Or build from source
-git clone https://github.com/yourusername/redup.git
+# build from source
+git clone https://github.com/brice-v/redup.git
 cd redup
 cargo build --release
 ```
