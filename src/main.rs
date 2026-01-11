@@ -7,6 +7,8 @@ use std::env::{Args, args};
 
 use walkdir::WalkDir;
 
+const VERSION: &str = env!("REDUP_VERSION");
+
 const USAGE: &str = r#"
 redup is a tool for finding duplicate files
 
@@ -70,6 +72,16 @@ fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn print_usage_and_exit() {
+    println!("{}", USAGE);
+    exit(0);
+}
+
+fn print_version_and_exit() {
+    println!("{}", VERSION);
+    exit(0);
+}
+
 fn parse_args(args: &mut Args) -> Result<Config, Box<dyn std::error::Error>> {
     let mut config = Config {
         quiet: false,
@@ -87,6 +99,8 @@ fn parse_args(args: &mut Args) -> Result<Config, Box<dyn std::error::Error>> {
         match arg.as_str() {
             "-q" | "--quiet" => config.quiet = true,
             "-v" | "--verbose" => config.verbose = true,
+            "-V" | "--version" => print_version_and_exit(),
+            "-h" | "--help" => print_usage_and_exit(),
             "--" => config.stdin_files = true,
             _ => break,
         }
