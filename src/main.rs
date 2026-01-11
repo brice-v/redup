@@ -30,6 +30,13 @@ Options:
 The files are hashed so even files with the same name
 will be found."#;
 
+// TODOs:
+//  - Update to only have quiet or verbose
+//  - Better Report Errors to user
+//     - Fix up error handling in general
+//  - Start hashing while iterating over directories
+//  - Cleanup output (make verbose more verbose and make sure default output can be read by other tools)
+
 #[derive(Debug)]
 struct Config {
     quiet: bool,
@@ -40,7 +47,6 @@ struct Config {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a runtime for async operations
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async { 
         run(args()).await?;
@@ -59,7 +65,6 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut m: HashMap<u64, Vec<String>> = HashMap::new();
     if config.stdin_files {
-        // Read from stdin
         let mut input = String::new();
         let mut stdin = stdin();
         stdin.read_to_string(&mut input).await?;
@@ -70,7 +75,6 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
         
         find_duplicates_from_list(&mut m, &files, &config).await?;
     } else {
-        // Read from directory
         match config.directory {
             Some(ref dir) => find_duplicates_from_directory(&mut m, &dir, &config).await?,
             None => {
@@ -104,8 +108,7 @@ fn parse_args(args: &mut Args) -> Result<Config, Box<dyn std::error::Error>> {
     
     let args_iter = args;
     args_iter.next(); // Skip program name
-    
-    // Process arguments
+
     while let Some(arg) = args_iter.next() {
         match arg.as_str() {
             "-q" | "--quiet" => config.quiet = true,
@@ -219,7 +222,6 @@ async fn find_duplicates_from_list(
 
     let results = get_hash_and_file_path(file_paths).await;
 
-    // Update the main hash map with results
     for (hash, path) in results {
         if let Some(v) = m.get_mut(&hash) {
             v.push(path);
