@@ -1,7 +1,10 @@
 use std::io::Read;
-use std::hash::Hash;
+use std::hash::{DefaultHasher, Hash};
 use std::hash::Hasher;
 use std::collections::HashMap;
+use std::process::exit;
+use std::fs::{File, canonicalize};
+use std::env::{Args, args};
 
 use walkdir::WalkDir;
 
@@ -25,28 +28,31 @@ will be found.
 // TODO: Fix up imports
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args();
+    run(args())
+}
+
+fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     if args.len() != 2 {
         eprintln!("{}", USAGE);
-        std::process::exit(1);
+        exit(1);
     }
     let directory = args.nth(1).unwrap();
     let mut m: HashMap<u64, Vec<String>> = HashMap::new();
     for entry in WalkDir::new(directory) {
-        let abs_path = std::fs::canonicalize(entry?.path())?;
+        let abs_path = canonicalize(entry?.path())?;
         if abs_path.is_dir() {
-            println!("Searching {}...", abs_path.display());
+            println!("Searching...\n\t{}", abs_path.display());
             continue;
         } else {
-            println!("Found file {}...", abs_path.display());
+            println!("\tFound file...\n\t\t{}", abs_path.display());
         }
         let abs_path_s = String::from(abs_path.clone().to_str().unwrap());
-        let mut f = std::fs::File::open(abs_path)?;
+        let mut f = File::open(abs_path)?;
         let mut buffer = Vec::new();
         // read the whole file
         f.read_to_end(&mut buffer)?;
-        println!("buffer = {:?}", buffer);
-        let mut hasher = std::hash::DefaultHasher::new();
+        // println!("buffer = {:?}", buffer);
+        let mut hasher = DefaultHasher::new();
         buffer.hash(&mut hasher);
         let hash_result = hasher.finish();
         if let Some(v) = m.get_mut(&hash_result) {
@@ -55,8 +61,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             m.insert(hash_result, vec![abs_path_s]);
         }
     }
-    if !m.is_empty() {
-        println!("DUPLICATES FOUND: {:#?}", m);
+    if m.values().any(|e| e.len() > 1) {
+        println!("\nDUPLICATES FOUND!");
+    } else {
+        println!("\nNo Duplicates Found!");
+    }
+    for item in m.values() {
+        if item.len() <= 1 {
+            continue;
+        }
+        println!("-");
+        for e in item {
+            println!("{}", e);
+        }
     }
     Ok(())
 }
