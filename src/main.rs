@@ -20,6 +20,7 @@ Arguments:
 Options:
     -q, --quiet             Suppress output message
     -v, --verbose           Show detailed progress
+    -V, --version           Show version message
     -h, --help              Show this help message
     --                      Read file paths from standard input (pipe ls output)
 
