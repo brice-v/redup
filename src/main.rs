@@ -5,9 +5,10 @@ use std::process::exit;
 use std::fs::canonicalize;
 use std::env::{Args, args};
 
-use walkdir::WalkDir;
+use tokio::task;
 use tokio::fs::File;
 use tokio::io::{BufReader, AsyncReadExt, stdin};
+use walkdir::WalkDir;
 
 const VERSION: &str = env!("REDUP_VERSION");
 
@@ -126,19 +127,22 @@ fn parse_args(args: &mut Args) -> Result<Config, Box<dyn std::error::Error>> {
 async fn hash_file_contents(file_path: &str) -> Result<Option<u64>, tokio::io::Error> {
     let file = File::open(file_path).await?;
     let mut reader = BufReader::new(file);
-    
-    let mut hasher = DefaultHasher::new();
-    let mut buffer = [0u8; 8192]; // 8KB buffer for efficient reading
-    
-    loop {
-        let bytes_read = reader.read(&mut buffer).await?;
-        if bytes_read == 0 {
-            break;
+
+    let hash_result = task::spawn_blocking(async move || {
+        let mut hasher = DefaultHasher::new();
+        let mut buffer = [0u8; 8192];
+
+        loop {
+            let bytes_read = reader.read(&mut buffer).await?;
+            if bytes_read == 0 {
+                break;
+            }
+            buffer[..bytes_read].hash(&mut hasher);
         }
-        buffer[..bytes_read].hash(&mut hasher);
-    }
-    
-    Ok(Some(hasher.finish()))
+        Ok::<u64, tokio::io::Error>(hasher.finish())
+    }).await?.await?;
+
+    Ok(Some(hash_result))
 }
 
 async fn find_duplicates_from_directory(
@@ -146,12 +150,11 @@ async fn find_duplicates_from_directory(
     directory: &str, 
     config: &Config
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Collect all file entries first
     let mut files = Vec::new();
     for entry in WalkDir::new(directory).into_iter() {
         let entry = entry?;
-        let abs_path = canonicalize(entry.path())?;
-        
+        let abs_path = entry.path().to_path_buf();
+
         if abs_path.is_dir() {
             if config.verbose {
                 println!("Searching...\n\t{}", abs_path.display());
@@ -160,13 +163,12 @@ async fn find_duplicates_from_directory(
         } else if config.verbose {
             println!("\tFound file...\n\t\t{}", abs_path.display());
         }
-        
+
         files.push(abs_path);
     }
 
     let results = get_hash_and_file_path(files).await;
 
-    // Update the main hash map with results
     for (hash, path) in results {
         if let Some(v) = m.get_mut(&hash) {
             v.push(path);
@@ -183,29 +185,24 @@ async fn find_duplicates_from_list(
     files: &[&str], 
     config: &Config
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Collect all file entries first
     let mut file_paths = Vec::new();
     
     for file_path in files {
         if file_path.is_empty() {
             continue;
         }
-        
+
         let abs_path = canonicalize(file_path)?;
-        
-        // Check if this is a directory
+
         if abs_path.is_dir() {
-            // Recursively search the directory
             if config.verbose {
                 println!("Searching directory...\n\t{}", abs_path.display());
             }
-            
             let abs_path_s = abs_path.to_string_lossy().to_string();
-            // Collect all files in this directory first
             for entry in WalkDir::new(&abs_path_s).into_iter() {
                 let entry = entry?;
-                let file_abs_path = canonicalize(entry.path())?;
-                
+                let file_abs_path = entry.path().to_path_buf();
+
                 if !file_abs_path.is_dir() {
                     file_paths.push(file_abs_path);
                 }
@@ -215,7 +212,7 @@ async fn find_duplicates_from_list(
             if config.verbose {
                 println!("Processing file...\n\t{}", abs_path.display());
             }
-            
+
             file_paths.push(abs_path);
         }
     }
@@ -250,7 +247,7 @@ async fn get_hash_and_file_path(file_paths: Vec<PathBuf>) -> Vec<(u64, String)> 
 
 fn print_results(m: &mut HashMap<u64, Vec<String>>, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let duplicates_found = m.values().any(|e| e.len() > 1);
-    
+
     if !config.quiet {
         if duplicates_found {
             println!("\nDUPLICATES FOUND!");
@@ -258,7 +255,7 @@ fn print_results(m: &mut HashMap<u64, Vec<String>>, config: &Config) -> Result<(
             println!("\nNo Duplicates Found!");
         }
     }
-    
+
     for item in m.values() {
         if item.len() <= 1 {
             continue;
@@ -268,6 +265,6 @@ fn print_results(m: &mut HashMap<u64, Vec<String>>, config: &Config) -> Result<(
             println!("{}", e);
         }
     }
-    
+
     Ok(())
 }
