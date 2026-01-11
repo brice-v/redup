@@ -1,11 +1,13 @@
-use std::io::{self, Read};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::exit;
-use std::fs::{File, canonicalize};
+use std::fs::canonicalize;
 use std::env::{Args, args};
 
 use walkdir::WalkDir;
+use tokio::fs::File;
+use tokio::io::{BufReader, AsyncReadExt, stdin};
 
 const VERSION: &str = env!("REDUP_VERSION");
 
@@ -37,10 +39,16 @@ struct Config {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    run(args())
+    // Create a runtime for async operations
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async { 
+        run(args()).await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+    Ok(())
 }
 
-fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let config = parse_args(&mut args)?;
     
     if config.help {
@@ -52,17 +60,18 @@ fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
     if config.stdin_files {
         // Read from stdin
         let mut input = String::new();
-        io::stdin().read_to_string(&mut input)?;
+        let mut stdin = stdin();
+        stdin.read_to_string(&mut input).await?;
         let files: Vec<&str> = input.lines().collect();
         if config.verbose {
             println!("stdin files = {:#?}", files);
         }
         
-        find_duplicates_from_list(&mut m, &files, &config)?;
+        find_duplicates_from_list(&mut m, &files, &config).await?;
     } else {
         // Read from directory
         match config.directory {
-            Some(ref dir) => find_duplicates_from_directory(&mut m, &dir, &config)?,
+            Some(ref dir) => find_duplicates_from_directory(&mut m, &dir, &config).await?,
             None => {
                 eprintln!("{}", USAGE);
                 exit(1);
@@ -103,14 +112,42 @@ fn parse_args(args: &mut Args) -> Result<Config, Box<dyn std::error::Error>> {
             "-V" | "--version" => print_version_and_exit(),
             "-h" | "--help" => print_usage_and_exit(),
             "--" => config.stdin_files = true,
-            _ => break,
+            _ => {
+                // If it's not a flag, treat it as directory path
+                config.directory = Some(arg);
+                break;
+            }
         }
     }
     
     Ok(config)
 }
 
-fn find_duplicates_from_directory(m: &mut HashMap<u64, Vec<String>>, directory: &str, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+async fn hash_file_contents(file_path: &str) -> Result<Option<u64>, tokio::io::Error> {
+    let file = File::open(file_path).await?;
+    let mut reader = BufReader::new(file);
+    
+    let mut hasher = DefaultHasher::new();
+    let mut buffer = [0u8; 8192]; // 8KB buffer for efficient reading
+    
+    loop {
+        let bytes_read = reader.read(&mut buffer).await?;
+        if bytes_read == 0 {
+            break;
+        }
+        buffer[..bytes_read].hash(&mut hasher);
+    }
+    
+    Ok(Some(hasher.finish()))
+}
+
+async fn find_duplicates_from_directory(
+    m: &mut HashMap<u64, Vec<String>>, 
+    directory: &str, 
+    config: &Config
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Collect all file entries first
+    let mut files = Vec::new();
     for entry in WalkDir::new(directory).into_iter() {
         let entry = entry?;
         let abs_path = canonicalize(entry.path())?;
@@ -124,27 +161,31 @@ fn find_duplicates_from_directory(m: &mut HashMap<u64, Vec<String>>, directory: 
             println!("\tFound file...\n\t\t{}", abs_path.display());
         }
         
-        let abs_path_s = abs_path.to_string_lossy().to_string();
-        let mut f = File::open(&abs_path)?;
-        let mut buffer = Vec::new();
-        
-        // read the whole file
-        f.read_to_end(&mut buffer)?;
-        
-        let mut hasher = DefaultHasher::new();
-        buffer.hash(&mut hasher);
-        let hash_result = hasher.finish();
-        
-        if let Some(v) = m.get_mut(&hash_result) {
-            v.push(abs_path_s);
+        files.push(abs_path);
+    }
+
+    let results = get_hash_and_file_path(files).await;
+
+    // Update the main hash map with results
+    for (hash, path) in results {
+        if let Some(v) = m.get_mut(&hash) {
+            v.push(path);
         } else {
-            m.insert(hash_result, vec![abs_path_s]);
+            m.insert(hash, vec![path]);
         }
     }
+
     Ok(())
 }
 
-fn find_duplicates_from_list(m: &mut HashMap<u64, Vec<String>>, files: &[&str], config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+async fn find_duplicates_from_list(
+    m: &mut HashMap<u64, Vec<String>>, 
+    files: &[&str], 
+    config: &Config
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Collect all file entries first
+    let mut file_paths = Vec::new();
+    
     for file_path in files {
         if file_path.is_empty() {
             continue;
@@ -160,32 +201,51 @@ fn find_duplicates_from_list(m: &mut HashMap<u64, Vec<String>>, files: &[&str], 
             }
             
             let abs_path_s = abs_path.to_string_lossy().to_string();
-            find_duplicates_from_directory(m, &abs_path_s, &config)?;
+            // Collect all files in this directory first
+            for entry in WalkDir::new(&abs_path_s).into_iter() {
+                let entry = entry?;
+                let file_abs_path = canonicalize(entry.path())?;
+                
+                if !file_abs_path.is_dir() {
+                    file_paths.push(file_abs_path);
+                }
+            }
         } else {
             // Handle as regular file
             if config.verbose {
                 println!("Processing file...\n\t{}", abs_path.display());
             }
             
-            let abs_path_s = abs_path.to_string_lossy().to_string();
-            let mut f = File::open(&abs_path)?;
-            let mut buffer = Vec::new();
-            
-            // read the whole file
-            f.read_to_end(&mut buffer)?;
-            
-            let mut hasher = DefaultHasher::new();
-            buffer.hash(&mut hasher);
-            let hash_result = hasher.finish();
-            
-            if let Some(v) = m.get_mut(&hash_result) {
-                v.push(abs_path_s);
-            } else {
-                m.insert(hash_result, vec![abs_path_s]);
-            }
+            file_paths.push(abs_path);
         }
     }
+
+    let results = get_hash_and_file_path(file_paths).await;
+
+    // Update the main hash map with results
+    for (hash, path) in results {
+        if let Some(v) = m.get_mut(&hash) {
+            v.push(path);
+        } else {
+            m.insert(hash, vec![path]);
+        }
+    }
+
     Ok(())
+}
+
+async fn get_hash_and_file_path(file_paths: Vec<PathBuf>) -> Vec<(u64, String)> {
+    let mut results = Vec::new();
+    
+    for abs_path in file_paths {
+        let abs_path_s = abs_path.to_string_lossy().to_string();
+        if let Ok(hash) = hash_file_contents(&abs_path_s).await {
+            if let Some(hash) = hash {
+                results.push((hash, abs_path_s));
+            }
+        };
+    }
+    results
 }
 
 fn print_results(m: &mut HashMap<u64, Vec<String>>, config: &Config) -> Result<(), Box<dyn std::error::Error>> {

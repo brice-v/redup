@@ -7,4 +7,12 @@ license = "MIT"
 build = "build.rs"
 
 [dependencies]
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "fs", "io-util", "io-std"] }
 walkdir = "2.5.0"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
