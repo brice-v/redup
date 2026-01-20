@@ -21,11 +21,13 @@ Arguments:
     DIR                     Directory to recursively search
 
 Options:
-    -q, --quiet             Suppress output message
-    -v, --verbose           Show detailed progress
-    -V, --version           Show version message
-    -h, --help              Show this help message
-    --                      Read file paths from standard input (pipe ls output)
+    -q, --quiet                Suppress output message
+    -v, --verbose              Show detailed progress
+    -V, --version              Show version message
+    -h, --help                 Show this help message
+    -o, --output               The filepath of output (Default: print to stdout)
+    -f, --format [csv,sql,txt] Choose the output format (Default: txt)
+    --                         Read file paths from standard input (pipe ls output)
 
 The files are hashed so even files with the same name
 will be found."#;
