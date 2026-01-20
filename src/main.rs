@@ -38,12 +38,21 @@ will be found."#;
 //  - Cleanup output (make verbose more verbose and make sure default output can be read by other tools)
 
 #[derive(Debug)]
+enum OutputFormat {
+    Csv,
+    Sql,
+    Text
+}
+
+#[derive(Debug)]
 struct Config {
     quiet: bool,
     verbose: bool,
     help: bool,
     stdin_files: bool,
     directory: Option<String>,
+    output_filepath: Option<String>,
+    output_format: OutputFormat,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -83,7 +92,11 @@ async fn run(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    print_results(&mut m, &config)?;
+    match config.output_format {
+        OutputFormat::Csv => println!("TODO: Handle CSV"),
+        OutputFormat::Sql => println!("TODO: Handler SQL"),
+        OutputFormat::Text => print_results(&mut m, &config)?,
+    }
     Ok(())
 }
 
@@ -97,6 +110,11 @@ fn print_version_and_exit() {
     exit(0);
 }
 
+fn print_error_message_with_usage_and_exit(msg: &str) {
+    println!("{}\n{}", msg, USAGE);
+    exit(1);
+}
+
 fn parse_args(args: &mut Args) -> Result<Config, Box<dyn std::error::Error>> {
     let mut config = Config {
         quiet: false,
@@ -104,6 +122,9 @@ fn parse_args(args: &mut Args) -> Result<Config, Box<dyn std::error::Error>> {
         help: false,
         stdin_files: false,
         directory: None,
+
+        output_filepath: None,
+        output_format: OutputFormat::Text,
     };
     
     let args_iter = args;
@@ -115,6 +136,32 @@ fn parse_args(args: &mut Args) -> Result<Config, Box<dyn std::error::Error>> {
             "-v" | "--verbose" => config.verbose = true,
             "-V" | "--version" => print_version_and_exit(),
             "-h" | "--help" => print_usage_and_exit(),
+            "-o" | "--output" => {
+                if let Some(output_filepath) = args_iter.next() {
+                    if std::path::Path::new(output_filepath.as_str()).exists() {
+                        print_error_message_with_usage_and_exit(format!("ERROR: {output_filepath} already exists").as_str());
+                    }
+                    // TODO: Check if we have permissions to open this file for writing in current directory
+                    // if not set to tmpdir file and log message
+                    config.output_filepath = Some(output_filepath)
+                } else {
+                    print_error_message_with_usage_and_exit("ERROR: output expects a filepath");
+                }
+            },
+            "-f" | "--format" => {
+                if let Some(format_type) = args_iter.next() {
+                    match format_type.to_ascii_lowercase().as_str() {
+                        "txt" | "text" => config.output_format = OutputFormat::Text,
+                        "csv" => config.output_format = OutputFormat::Csv,
+                        "sql" | "sqlite" | "db" => config.output_format = OutputFormat::Sql,
+                        _ => {
+                            print_error_message_with_usage_and_exit(format!("ERROR: Invalid file format {format_type}").as_str());
+                        }
+                    }
+                } else {
+                    print_error_message_with_usage_and_exit("ERROR: format expects one of txt, csv, or sql");
+                }
+            }
             "--" => config.stdin_files = true,
             _ => {
                 // If it's not a flag, treat it as directory path
